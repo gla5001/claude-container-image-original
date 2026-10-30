@@ -1,0 +1,7 @@
+node_modules/
+.env
+.idea
+.claude# Written by Claude Code when it loads the mod
+claude-agents/mods/*/.claude-plugin/types/
+dist/
+.playwright-mcp/
