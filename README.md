@@ -2,6 +2,8 @@
 
 A web UI that runs a command (default: `claude`) in a pseudo-terminal and lets you drive it from the browser. It shows live output, the last ~1000 lines of history, and whether the process is **Working** or **Needs input**.
 
+Requires Node 26 (`nvm use` picks it up from `.nvmrc`).
+
 ```sh
 npm install
 npm run dev      # web on http://localhost:5173, session server on 127.0.0.1:3001
@@ -23,6 +25,33 @@ To deploy, ship `package.json`, `package-lock.json` and `dist/`, then run `npm c
 
 The command runs in `SESSION_CWD` (default: the directory the server was started from). The browser can't change it.
 
+### Docker
+
+Claude in the container signs in with an OAuth token from your Claude subscription (Pro, Max, Team or Enterprise). Create one once on your machine. `claude setup-token` opens a browser sign-in and prints a token that lasts a year:
+
+```sh
+claude setup-token
+export CLAUDE_CODE_OAUTH_TOKEN=<the token it printed>
+```
+
+Then build and run:
+
+```sh
+docker build -t session-runner .
+docker run --rm --init -p 127.0.0.1:3001:3001 -e CLAUDE_CODE_OAUTH_TOKEN session-runner
+```
+
+Open http://localhost:3001. Ctrl+C stops the container.
+
+- `-e CLAUDE_CODE_OAUTH_TOKEN` passes the token through from your shell, so it never appears in the command line. The image marks Claude's first-run setup as done, so Claude uses the token without asking for a browser login.
+- Claude still asks whether to trust `/workspace` the first time in each new container. Answer with ↓ then Enter.
+- To use a Console API key instead, pass `-e ANTHROPIC_API_KEY`. Pass only one of the two: an API key takes precedence over the token.
+- `-p 127.0.0.1:3001:3001` publishes the port only on your own machine. Keep the `127.0.0.1:` prefix: anyone who can reach the port gets a shell in the container.
+- Sessions run in `/workspace`, an empty folder inside the container. Anything created there is deleted when the container stops.
+- `--init` lets Ctrl+C and `docker stop` shut the server down.
+- The image runs Node 26 on Debian trixie. It installs Claude Code with the [native installer](https://code.claude.com/docs/en/quickstart#step-1-install-claude-code) into `/home/node/.local/bin`.
+- Claude's settings and login live inside the container and disappear when it exits. Your `~/.claude` mods aren't included.
+
 ## How it works
 
 - `server/session.ts`: spawns the command through `$SHELL -c` in a PTY (`node-pty`), keeps a short output buffer for clients that reconnect, and tracks status. **Needs input** means the live process has printed nothing for 1.5s.
@@ -40,4 +69,4 @@ Claude loads the mod from `~/.claude/settings.json` like it does in any other te
 
 ## Security
 
-This is a remote shell. The server binds to `127.0.0.1` and only accepts WebSocket connections from `localhost` origins. Don't expose it without adding authentication.
+This is a remote shell. The server binds to `127.0.0.1` by default (`HOST` overrides it; the Docker image uses `0.0.0.0`). It only accepts WebSocket connections from `localhost` origins. Don't expose it without adding authentication.

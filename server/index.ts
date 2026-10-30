@@ -6,7 +6,8 @@ import type { ClientMessage, ServerMessage } from '../shared/protocol';
 import { Session } from './session';
 
 const PORT = Number(process.env.PORT ?? 3001);
-const HOST = '127.0.0.1'; // never expose beyond localhost: this is a remote shell
+// This is a remote shell: keep it on localhost. Containers set HOST=0.0.0.0 and publish only to the host's loopback.
+const HOST = process.env.HOST ?? '127.0.0.1';
 const CWD = process.env.SESSION_CWD ?? process.cwd(); // set by the operator, never by the browser
 
 // Block cross-site WebSocket hijacking: only pages served from this machine may drive the shell.
