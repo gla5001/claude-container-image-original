@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import type { ClientMessage, ServerMessage, SessionState, TermSize } from '../shared/protocol';
+import type { ClientMessage, ServerMessage, SessionState, Settings, TermSize } from '../shared/protocol';
 import type { TerminalHandle } from './Terminal';
 
 /** Connects to the session server, pipes output into `terminal`, and reconnects on drop. */
@@ -7,6 +7,7 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
   const socket = useRef<WebSocket>(null);
   const [connected, setConnected] = useState(false);
   const [state, setState] = useState<SessionState>({ status: 'idle' });
+  const [settings, setSettings] = useState<Settings>({ oauthTokenSet: false });
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -36,6 +37,15 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
             break;
           case 'state':
             setState(msg.state);
+            // Claude starts by itself when the page opens; the server ignores this unless claude has
+            // never run, so extra tabs and an exited claude are left alone.
+            if (msg.state.status === 'idle') {
+              ws.send(JSON.stringify({ type: 'start', ...terminal.current!.size() } satisfies ClientMessage));
+            }
+
+            break;
+          case 'settings':
+            setSettings(msg.settings);
             break;
           case 'error':
             setError(msg.message);
@@ -61,15 +71,15 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
     };
 
     return {
-      start: (command: string) => {
+      restart: () => {
         setError(undefined);
-        send({ type: 'start', command, ...terminal.current!.size() });
+        send({ type: 'restart', ...terminal.current!.size() });
       },
-      stop: () => send({ type: 'stop' }),
       input: (data: string) => send({ type: 'input', data }),
       resize: (size: TermSize) => send({ type: 'resize', ...size }),
+      setOAuthToken: (token: string) => send({ type: 'setOAuthToken', token }),
     };
   }, [terminal]);
 
-  return { connected, state, error, ...actions };
+  return { connected, state, settings, error, ...actions };
 }

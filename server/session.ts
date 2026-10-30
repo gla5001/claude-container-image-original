@@ -27,25 +27,39 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
     super();
   }
 
-  start({ command, cwd, cols, rows }: { command: string; cwd: string } & TermSize) {
+  /**
+   * `label` is the command clients see (defaults to `command`).
+   * `env` is layered over the server's environment; an `undefined` value removes that variable.
+   */
+  start({
+    command,
+    label = command,
+    cwd,
+    cols,
+    rows,
+    env = {},
+  }: { command: string; label?: string; cwd: string; env?: Record<string, string | undefined> } & TermSize) {
     if (!statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
       throw new Error(`Not a directory: ${cwd}`);
     }
 
     this.stop();
     // If this server was started from inside Claude Code, don't let the child think it's nested.
-    const { CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, ...env } = process.env;
+    const { CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, ...inherited } = process.env;
+    const merged = { ...inherited, COLORTERM: 'truecolor', ...env };
     const proc = spawn(SHELL, ['-c', command], {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...env, COLORTERM: 'truecolor' },
+      env: Object.fromEntries(
+        Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      ),
     });
     this.proc = proc;
     this.history = '';
     this.blocked = false;
-    this.setState({ status: 'running', command, cwd });
+    this.setState({ status: 'running', command: label, cwd });
     this.armIdleTimer();
 
     // Guards ignore late events from a process that a restart already replaced.

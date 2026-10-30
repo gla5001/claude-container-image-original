@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { SessionStatus } from '../shared/protocol';
+import { SettingsDialog } from './SettingsDialog';
 import { Terminal, type TerminalHandle } from './Terminal';
+import { button, field, fieldInput } from './ui';
 import { useSession } from './useSession';
 
 const STATUS: Record<SessionStatus, { label: string; hint: string; dot: string; accent: string; bar: string }> = {
   idle: {
-    label: 'Idle',
-    hint: 'Start a command to begin.',
+    label: 'Starting',
+    hint: 'Starting Claude…',
     dot: 'bg-zinc-400',
     accent: 'border-zinc-200 text-zinc-500',
     bar: 'bg-zinc-50',
@@ -27,7 +29,7 @@ const STATUS: Record<SessionStatus, { label: string; hint: string; dot: string; 
   },
   exited: {
     label: 'Exited',
-    hint: 'Process finished.',
+    hint: 'Claude exited. Restart to pick up the conversation where it left off.',
     dot: 'bg-zinc-400',
     accent: 'border-zinc-200 text-zinc-500',
     bar: 'bg-zinc-50',
@@ -48,18 +50,11 @@ const KEYS = [
   { label: 'Ctrl C', data: '\x03' },
 ];
 
-const field =
-  'flex items-center rounded-lg border border-zinc-300 bg-white shadow-xs focus-within:border-orange-400 focus-within:ring-2 focus-within:ring-orange-400/20';
-const fieldInput =
-  'min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 disabled:text-zinc-500';
-const button =
-  'rounded-lg px-4 py-2 text-sm font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-40';
-
 export default function App() {
   const terminal = useRef<TerminalHandle>(null);
-  const { connected, state, error, start, stop, input, resize } = useSession(terminal);
-  const [command, setCommand] = useState('claude');
+  const { connected, state, settings, error, restart, input, resize, setOAuthToken } = useSession(terminal);
   const [reply, setReply] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const live = state.status === 'running' || state.status === 'waiting';
   const meta = STATUS[state.status];
 
@@ -72,13 +67,20 @@ export default function App() {
     }
   }, [state.status, state.command]);
 
-  const onStart = (e: FormEvent) => {
-    e.preventDefault();
-    if (Notification.permission === 'default') {
-      void Notification.requestPermission();
-    }
+  // Browsers only allow the notification prompt from a user gesture, so ask on the first click.
+  useEffect(() => {
+    const ask = () => {
+      if (Notification.permission === 'default') {
+        void Notification.requestPermission();
+      }
+    };
 
-    start(command);
+    window.addEventListener('pointerdown', ask, { once: true });
+    return () => window.removeEventListener('pointerdown', ask);
+  }, []);
+
+  const onRestart = () => {
+    restart();
     terminal.current?.focus();
   };
 
@@ -90,6 +92,13 @@ export default function App() {
     setReply('');
   };
 
+  const onSaveToken = (token: string, restartNow: boolean) => {
+    setOAuthToken(token);
+    if (restartNow) {
+      onRestart();
+    }
+  };
+
   return (
     <div className="flex h-dvh flex-col bg-zinc-50 text-zinc-900">
       <header className="flex items-center justify-between gap-4 border-b border-zinc-200 bg-white px-4 py-3 sm:px-6">
@@ -99,9 +108,7 @@ export default function App() {
           </div>
           <div className="min-w-0">
             <h1 className="text-sm font-semibold">Session Runner</h1>
-            <p className="truncate font-mono text-xs text-zinc-500">
-              {state.command ? `${state.command}  ·  ${state.cwd}` : 'No session yet'}
-            </p>
+            <p className="truncate font-mono text-xs text-zinc-500">{state.cwd ?? 'No session yet'}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -118,41 +125,58 @@ export default function App() {
             </span>
             {meta.label}
           </span>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            title="Settings"
+            className="grid size-8 place-items-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="size-5" aria-hidden>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
+              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+          </button>
         </div>
       </header>
 
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        tokenSet={settings.oauthTokenSet}
+        live={live}
+        onSave={onSaveToken}
+      />
+
       <main className="flex min-h-0 w-full flex-1 flex-col gap-3 p-4 sm:p-6">
-        <form onSubmit={onStart} className="flex gap-2">
-          <label className={`${field} flex-1`}>
-            <span className="pl-3 font-mono text-sm text-orange-500">$</span>
-            <input
-              aria-label="Command"
-              className={`${fieldInput} font-mono`}
-              value={live ? state.command : command}
-              onChange={(e) => setCommand(e.target.value)}
-              disabled={live}
-              placeholder="claude"
-              required
-            />
-          </label>
-          {live ? (
-            <button
-              type="button"
-              onClick={stop}
-              className={`${button} border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100`}
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!connected}
-              className={`${button} bg-orange-500 text-white hover:bg-orange-600`}
-            >
-              {state.status === 'exited' ? 'Restart' : 'Start'}
-            </button>
-          )}
-        </form>
+        <div className="flex gap-2">
+          {/* Read-only: the server always runs claude. */}
+          <div
+            aria-label="Command"
+            className="flex flex-1 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 font-mono text-sm text-zinc-700"
+          >
+            <span className="text-orange-500">$</span>
+            {state.command ?? 'claude'}
+          </div>
+          {/* Highlighted once claude has exited, since restarting is then the way forward. */}
+          <button
+            type="button"
+            onClick={onRestart}
+            disabled={!connected || state.status === 'idle'}
+            title="Restart Claude and continue the same conversation"
+            className={`${button} ${
+              state.status === 'exited'
+                ? 'bg-orange-500 text-white hover:bg-orange-600'
+                : 'border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            Restart
+          </button>
+        </div>
 
         {error && (
           <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -197,7 +221,7 @@ export default function App() {
                 onChange={(e) => setReply(e.target.value)}
                 disabled={!live}
                 placeholder={
-                  live ? 'Type a reply and press Enter, or type straight into the terminal' : 'Start a session to reply'
+                  live ? 'Type a reply and press Enter, or type straight into the terminal' : 'Restart Claude to reply'
                 }
               />
             </label>

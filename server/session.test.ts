@@ -43,6 +43,32 @@ test('a blocking prompt reads as waiting even while output keeps animating', asy
   await waitFor(session, 'exited');
 });
 
+test('env overrides are added, and undefined ones removed', async () => {
+  process.env.SESSION_TEST_REMOVED = 'inherited';
+  const session = new Session(200);
+  session.start({
+    command: 'echo "removed=${SESSION_TEST_REMOVED:-unset} added=$SESSION_TEST_ADDED"',
+    cwd: '.',
+    cols: 80,
+    rows: 24,
+    env: { SESSION_TEST_REMOVED: undefined, SESSION_TEST_ADDED: 'yes' },
+  });
+  await waitFor(session, 'exited');
+
+  assert.match(session.history, /removed=unset added=yes/);
+});
+
+test('stop() ends the wrapping shell too, so a `|| fallback` never runs', async () => {
+  const session = new Session(200);
+  session.start({ command: 'sleep 30 || echo fallback-ran', cwd: '.', cols: 80, rows: 24 });
+  await new Promise((resolve) => setTimeout(resolve, 200)); // let sleep start
+  session.stop();
+  await waitFor(session, 'exited');
+  await new Promise((resolve) => setTimeout(resolve, 200)); // any fallback output would have arrived
+
+  assert.doesNotMatch(session.history, /fallback-ran/);
+});
+
 test('stop() ends the process', async () => {
   const session = new Session(200);
   session.start({ command: 'sleep 30', cwd: '.', cols: 80, rows: 24 });
