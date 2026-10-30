@@ -6,7 +6,8 @@ import type { ClientMessage, ServerMessage, TermSize } from '../shared/protocol'
 import { Session } from './session';
 
 const PORT = Number(process.env.PORT ?? 3001);
-// This is a remote shell: keep it on localhost. Containers set HOST=0.0.0.0 and publish only to the host's loopback.
+// This is a remote shell with no login: it listens on loopback unless told otherwise. Only local
+// Docker sets HOST=0.0.0.0, and then publishes the port on the host's loopback only.
 const HOST = process.env.HOST ?? '127.0.0.1';
 const CWD = process.env.SESSION_CWD ?? process.cwd(); // set by the operator, never by the browser
 

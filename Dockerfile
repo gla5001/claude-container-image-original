@@ -64,15 +64,47 @@ RUN claude mcp add --scope user playwright -- playwright-mcp --browser chromium 
 # to the running container.
 # OWNER/REPO or a GitHub URL. A different repo must keep the same layout (claude-agents/install.sh).
 ARG CODING_AGENTS_REPO=gla5001/coding-agents
-RUN --mount=type=secret,id=gh_token,env=GH_TOKEN \
-  gh repo clone "$CODING_AGENTS_REPO" ~/coding-agents \
-  && gh auth setup-git \
-  && ~/coding-agents/claude-agents/install.sh
+RUN --mount=type=secret,id=gh_token,env=GH_TOKEN <<'EOF'
+set -e
+if [ -z "$GH_TOKEN" ]; then
+  echo 'ERROR: no GitHub token. Build with: GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN ...' >&2
+  exit 1
+fi
+gh repo clone "$CODING_AGENTS_REPO" ~/coding-agents
+gh auth setup-git
+~/coding-agents/claude-agents/install.sh
+EOF
+
+# The repo Claude works on (required): OWNER/REPO or a GitHub URL. It is cloned with the same token
+# into /workspace/<repo name>, and every Claude session starts at its root. Declared this late so that
+# changing the repo doesn't rebuild the steps above.
+ARG WORKSPACE_REPO
+ENV SESSION_CWD=/workspace/${WORKSPACE_REPO##*/}
+ENV SESSION_CWD=${SESSION_CWD%.git}
+# (The token check repeats the one above: Docker reuses that step from cache, secrets don't change it.)
+RUN --mount=type=secret,id=gh_token,env=GH_TOKEN <<'EOF'
+if [ -z "$GH_TOKEN" ]; then
+  echo 'ERROR: no GitHub token. Build with: GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN ...' >&2
+  exit 1
+fi
+if [ -z "$WORKSPACE_REPO" ]; then
+  echo 'ERROR: no repo to work on. Pass the repo Claude should work in: --build-arg WORKSPACE_REPO=OWNER/REPO' >&2
+  exit 1
+fi
+if ! gh repo clone "$WORKSPACE_REPO" "$SESSION_CWD"; then
+  echo "ERROR: could not clone $WORKSPACE_REPO. The GitHub token passed as the gh_token build secret needs" \
+    "read access to it. Check the repo name, and that the token's account can see the repo." >&2
+  exit 1
+fi
+EOF
 
 WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3001 SESSION_CWD=/workspace
+# The server listens on the container's loopback only (HOST defaults to 127.0.0.1): nothing on the
+# container or pod network can reach it. Kubernetes reaches it through `kubectl port-forward`. Local
+# Docker opts in with `-e HOST=0.0.0.0 -p 127.0.0.1:3001:3001` (see README).
+ENV NODE_ENV=production PORT=3001
 EXPOSE 3001
 CMD ["node", "dist/index.js"]

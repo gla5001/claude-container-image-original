@@ -1,0 +1,63 @@
+# Session Runner on Kubernetes: one pod per person and repo, reachable only through `kubectl port-forward`.
+#
+# There is deliberately no Service, Ingress or LoadBalancer. The app has no login of its own, and it is a
+# shell holding your Claude and GitHub tokens, so nothing on the network may reach it. The server listens
+# on the pod's loopback only (the image's default), and port-forward, which runs inside the pod's network
+# namespace and is authorized by your cluster credentials, is the only way in.
+#
+# Before applying: create the `session-runner` Secret (see README, "Run in production") and set `image`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: session-runner
+  labels:
+    app: session-runner
+spec:
+  replicas: 1 # one Claude session per pod; never scale this up
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: session-runner
+  template:
+    metadata:
+      labels:
+        app: session-runner
+    spec:
+      automountServiceAccountToken: false # nothing in the pod needs the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # the image's `node` user
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: session-runner
+          image: registry.example.com/session-runner:my-repo # your private registry
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: session-runner
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources: # a starting point; Claude plus a headless Chromium for the QA agent
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+---
+# Defense in depth: refuse all incoming pod-network traffic, even if someone later sets HOST=0.0.0.0.
+# Port-forward doesn't come in over the pod network, so it keeps working. Needs a CNI that enforces
+# NetworkPolicy (Calico, Cilium, the AWS VPC CNI with network policies on, ...).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: session-runner-deny-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: session-runner
+  policyTypes: [Ingress]
