@@ -10,7 +10,7 @@ Read this before running it anywhere but your own laptop.
 
 - **The app is a shell with no login.** Anyone who can reach its port controls Claude and the shell around it, and can read the Claude and GitHub tokens the container holds. Access must be limited to you.
 - **The server listens on loopback (`127.0.0.1`) only**, in the image too. Nothing on the container or pod network can reach it.
-- **There are only two ways in:** `kubectl port-forward` in Kubernetes, or local Docker with `HOST=0.0.0.0` and the port published on your machine's loopback only. Both are described below.
+- **There are only two ways in:** `kubectl port-forward` in Kubernetes, or local Docker with `HOST=0.0.0.0` and the port published on your machine's loopback only. Both are described below. To serve it on a domain instead, see [Serving it on a domain](#serving-it-on-a-domain).
 - **The origin check isn't authentication.** It stops other websites from driving the app through your browser. Any other client that can reach the port is accepted, which is why the port must stay unreachable.
 
 ## Run in production (Kubernetes)
@@ -72,7 +72,58 @@ Rules for keeping it safe:
 - **Give each person their own namespace.** Anyone with `pods/portforward` or `pods/exec` permission in the namespace can use the session and read its tokens. Grant those permissions only to the person the session belongs to.
 - **Push your work.** Nothing is persisted: a pod restart resets the repo to the commit the image was built from. Rebuild the image to start from newer code.
 - **Replace tokens deliberately.** For the running pod, paste a new Claude token in Settings (see [Switching Claude accounts](#switching-claude-accounts)). That token is gone when the pod restarts. To change it permanently, update the Secret and run `kubectl -n your-namespace rollout restart deploy/session-runner`.
-- **Sharing a session with a team over the network** needs an authenticating proxy in the same pod, such as `oauth2-proxy` with your GitHub org, in front of the still-loopback-only app. This repo doesn't include one. Don't expose the app itself.
+- **Sharing a session over the network** needs an authenticating proxy in front of the app. See [Serving it on a domain](#serving-it-on-a-domain). Don't expose the app itself.
+
+## Serving it on a domain
+
+This repo doesn't include this setup yet. It describes how to reach a session at a URL like `https://example.com` instead of through port-forward.
+
+**Don't set `HOST=0.0.0.0` and point an Ingress at the app.** That puts a shell with no login on the internet.
+
+**Best practice is not to write your own auth.** Use these layers together:
+
+1. **Single sign-on through your identity provider** (Okta, Google Workspace, Entra or a GitHub org), with MFA enforced there. No shared passwords or tokens.
+2. **An identity-aware proxy in front of the app**, such as `oauth2-proxy` or the AWS load balancer's (ALB's) built-in OIDC. The app never handles logins itself.
+3. **An allow-list per pod.** Being logged in isn't enough. Only the person a session belongs to gets into it.
+4. **The proxy as the only way in.** The NetworkPolicy, or security groups for pods on EKS, lets traffic reach the proxy and nothing else.
+5. **The app checks the identity itself**, by verifying the signed identity header the proxy adds and the `Origin` header. A misconfigured proxy then fails closed instead of open.
+6. **Ideally, no public exposure.** Use an internal load balancer reached over a VPN or zero-trust network (Tailscale, Cloudflare Access, AWS Verified Access), so even the login page isn't public. Treat this like SSH into production.
+
+### Sidecar proxy (recommended)
+
+Kubernetes schedules **pods**, and a pod can run several **containers**. All containers in a pod share one network namespace: the same IP, the same `127.0.0.1` and the same ports. Run `oauth2-proxy` as a second container in the session-runner pod and it can reach the app on loopback, while nothing outside the pod can:
+
+```
+internet ──▶ ALB ──▶ pod IP :4180
+                       │
+          ┌─────── pod ┼──────────────────────────────┐
+          │  container: oauth2-proxy                  │
+          │    listens 0.0.0.0:4180  (reachable)      │
+          │    checks login, then forwards to ───┐    │
+          │                                      ▼    │
+          │  container: session-runner                │
+          │    listens 127.0.0.1:3001 (pod-only)      │
+          └───────────────────────────────────────────┘
+```
+
+- The proxy reaches `127.0.0.1:3001` because it shares the pod's loopback.
+- Other pods and anything else in the VPC can only reach the pod IP. Nothing listens on 3001 there, so their connections are refused. The only way in is port 4180, through the login.
+- The Service, Ingress and NetworkPolicy all point at port 4180 only. The app keeps its default `HOST`.
+
+### ALB OIDC (no sidecar)
+
+On EKS, the AWS Load Balancer Controller can require a login at the load balancer itself (`alb.ingress.kubernetes.io/auth-type: oidc`, or Cognito). That takes only Ingress annotations, but the login happens outside the pod, so there's no shared loopback:
+
+- The app has to listen on the pod IP (`HOST=0.0.0.0`).
+- Anything that can reach the pod IP directly skips the login. Allow ingress only from the ALB's security group.
+- The app should verify the `x-amzn-oidc-data` JWT the ALB adds to every request, and refuse requests without it.
+
+The sidecar is the safer of the two, because the app never leaves loopback.
+
+### App changes either setup needs
+
+- **Allowed origin.** `isLocalOrigin` in `server/index.ts` accepts only `localhost`, `127.0.0.1` and `[::1]`, so the WebSocket from `https://example.com` would be refused. It needs a setting for the public origin.
+- **Still one session per pod.** Everyone who gets into a pod shares its Claude session. Give each person their own pod and hostname or path.
 
 ## Run locally with Docker
 
