@@ -9,15 +9,32 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
   const [state, setState] = useState<SessionState>({ status: 'idle' });
   const [settings, setSettings] = useState<Settings>({ oauthTokenSet: false });
   const [error, setError] = useState<string>();
+  const [pushKey, setPushKey] = useState<string>();
 
   useEffect(() => {
     let disposed = false;
     let retry: number | undefined;
 
+    // The server skips push notifications while someone is looking at a page.
+    const sendFocus = () => {
+      if (socket.current?.readyState === WebSocket.OPEN) {
+        const focused = document.visibilityState === 'visible' && document.hasFocus();
+        socket.current.send(JSON.stringify({ type: 'focus', focused } satisfies ClientMessage));
+      }
+    };
+
+    window.addEventListener('focus', sendFocus);
+    window.addEventListener('blur', sendFocus);
+    document.addEventListener('visibilitychange', sendFocus);
+
     const connect = () => {
       const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
       socket.current = ws;
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        sendFocus();
+      };
+
       ws.onclose = () => {
         setConnected(false);
         if (!disposed) {
@@ -50,6 +67,9 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
           case 'error':
             setError(msg.message);
             break;
+          case 'pushKey':
+            setPushKey(msg.key);
+            break;
         }
       };
     };
@@ -58,6 +78,9 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
     return () => {
       disposed = true;
       clearTimeout(retry);
+      window.removeEventListener('focus', sendFocus);
+      window.removeEventListener('blur', sendFocus);
+      document.removeEventListener('visibilitychange', sendFocus);
       socket.current?.close();
     };
   }, [terminal]);
@@ -78,8 +101,9 @@ export function useSession(terminal: RefObject<TerminalHandle | null>) {
       input: (data: string) => send({ type: 'input', data }),
       resize: (size: TermSize) => send({ type: 'resize', ...size }),
       setOAuthToken: (token: string) => send({ type: 'setOAuthToken', token }),
+      subscribePush: (subscription: PushSubscriptionJSON) => send({ type: 'subscribe', subscription }),
     };
   }, [terminal]);
 
-  return { connected, state, settings, error, ...actions };
+  return { connected, state, settings, error, pushKey, ...actions };
 }

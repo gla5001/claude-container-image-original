@@ -1,6 +1,7 @@
 // Messages exchanged over the /ws WebSocket. Shared by server and client.
 
-export type SessionStatus = 'idle' | 'running' | 'waiting' | 'exited';
+// starting: launched, and not yet quiet for the first time (its startup screen isn't work)
+export type SessionStatus = 'idle' | 'starting' | 'running' | 'waiting' | 'exited';
 
 export interface SessionState {
   status: SessionStatus;
@@ -23,11 +24,14 @@ export type ClientMessage =
   | ({ type: 'restart' } & TermSize) // stop claude if running, start it again on its latest conversation
   | { type: 'input'; data: string }
   | ({ type: 'resize' } & TermSize)
-  | { type: 'setOAuthToken'; token: string }; // empty clears it
+  | { type: 'setOAuthToken'; token: string } // empty clears it
+  | { type: 'subscribe'; subscription: PushSubscriptionJSON } // this browser's Web Push subscription
+  | { type: 'focus'; focused: boolean }; // whether someone is looking at this page
 
 export type ServerMessage =
   | { type: 'reset' } // clear the terminal; fresh output follows
   | { type: 'output'; data: string }
   | { type: 'state'; state: SessionState }
   | { type: 'settings'; settings: Settings }
+  | { type: 'pushKey'; key: string } // the server's VAPID public key, for pushManager.subscribe
   | { type: 'error'; message: string };

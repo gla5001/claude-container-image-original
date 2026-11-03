@@ -1,6 +1,6 @@
 # Session Runner
 
-A web UI that runs Claude Code (`claude`) in a pseudo-terminal and lets you drive it from the browser. The app only ever runs `claude`: the browser can't choose a different command. It shows live output, the last ~1000 lines of history, and whether Claude is **Working** or **Needs input**.
+A web UI that runs Claude Code (`claude`) in a pseudo-terminal and lets you drive it from the browser. The app only ever runs `claude`: the browser can't choose a different command. It shows live output, the last ~1000 lines of history, and whether Claude is **Working** or **Needs input**. It can also send a push notification to your desktop or phone when Claude needs input (see [Notifications](#notifications)).
 
 Claude starts on its own when the first page opens. Other tabs join the same session. **Restart** stops Claude if it's running and starts it again on the same conversation (`claude --continue`, or a fresh `claude` if there's nothing to resume). If you quit Claude (`/exit`, Ctrl-C twice), it stays stopped until you press Restart. For a fresh conversation, use `/clear` inside Claude.
 
@@ -176,6 +176,24 @@ Optional build arguments:
 
 Both clones are cached like any other build step, so a rebuild won't pick up new commits in either repo on its own. Add `--no-cache` when you want the latest. Changing `WORKSPACE_REPO` re-clones only the workspace repo.
 
+## Notifications
+
+Press the bell in the header and allow notifications. From then on, each time Claude stops and waits for you (it finished a turn, asks a question, or a permission or destruction-blocker prompt appears), that browser gets a notification, even with the tab closed or the phone locked. Click it to return to the session. No notification is sent while you have a Session Runner tab focused on any device, since you're already looking.
+
+It's standard [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API), with no account or third-party SDK. A service worker (`public/sw.js`) shows the notifications, and the server sends them itself with keys it generates when it starts. Delivery goes through the push service built into each browser (Google's for Chrome, Mozilla's for Firefox, Apple's for Safari), so the container needs outbound HTTPS to those services, like it already needs for GitHub and Anthropic. Messages are encrypted end to end. The push service sees only the delivery address, and the message holds only the repo folder's name.
+
+What each device needs:
+
+- **Desktop:** works through `kubectl port-forward` or local Docker as-is. Browsers treat `localhost` as secure.
+- **Android:** Chrome or Firefox, opening the app over HTTPS. A phone can't reach your laptop's `localhost`, so this needs the setup in [Serving it on a domain](#serving-it-on-a-domain).
+- **iPhone and iPad (iOS 16.4+):** the same HTTPS address, opened in Safari, then **Share → Add to Home Screen**. Open the app from the Home Screen icon and press the bell there. Safari tabs can't get web push. Only Home Screen apps can.
+
+Good to know:
+
+- The bell is dimmed when notifications aren't possible (plain `http` off `localhost`, or iOS outside a Home Screen app) or are blocked in browser settings. Hover over it to see which.
+- The server keeps subscriptions in memory. After the container or pod restarts, open the app once on each device and it subscribes again without asking.
+- A browser holds one push subscription per address. To get notifications from several pods on one machine, forward each pod to its own local port (`3001:3001`, `3002:3001`, …).
+
 ## Switching Claude accounts
 
 To switch Claude accounts or replace an expired token without restarting the container, open **Settings** (the gear in the header) and paste a new token. It applies to every session started afterwards and replaces any `ANTHROPIC_API_KEY`. With **Restart the running session now** ticked, Claude restarts on the new token and picks up the same conversation. The server keeps the token in memory only. It is never sent back to a browser and is gone when the container stops.
@@ -201,13 +219,17 @@ Prettier handles formatting. ESLint enforces two rules on top: braces on every `
 ## How it works
 
 - `server/session.ts`: spawns `claude` through `$SHELL -c` in a PTY (`node-pty`), keeps a short output buffer for clients that reconnect, and tracks status.
-- `server/index.ts`: Express + `ws`. Relays output, input and resize events between the session and every connected tab, and holds the token set in Settings.
-- `src/`: React + xterm.js terminal, quick keys for TUI prompts (↑ ↓ Enter Esc 1/2/3…), a reply box and the Settings dialog. When the session blocks, the tab title changes and a desktop notification fires if the tab is hidden.
+- `server/index.ts`: Express + `ws`. Relays output, input and resize events between the session and every connected tab, holds the token set in Settings, and sends a push notification when the session starts waiting and no tab is focused.
+- `server/push.ts`: Web Push with `web-push`. Generates the VAPID keys, keeps browser subscriptions in memory, and drops the ones the push service says are gone.
+- `src/`: React + xterm.js terminal, quick keys for TUI prompts (↑ ↓ Enter Esc 1/2/3…), a reply box, the notifications bell (`usePush.ts`) and the Settings dialog. When the session blocks, the tab title changes too.
+- `public/`: the service worker that shows notifications, and the web app manifest that lets iOS add the app to the Home Screen.
 - `shared/protocol.ts`: the WebSocket message types both sides use.
 
 ## Status detection
 
 **Needs input** is shown when Claude has been quiet for 1.5s, or when a known blocking prompt appears (`BLOCKED_MARKERS` in `server/session.ts`). The second check covers prompts like the destruction-blocker mod's, where Claude's spinner keeps animating during the hold. It stays on until the user sends input.
+
+**Starting** is shown from launch (or Restart) until Claude first goes quiet, so its startup screen doesn't read as **Working**. Output that draws nothing, like the cursor position queries idle Claude sends several times a second, never counts as working.
 
 ## Destruction blocker mod
 

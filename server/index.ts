@@ -1,8 +1,10 @@
 import express from 'express';
 import { createServer } from 'node:http';
+import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { ClientMessage, ServerMessage, TermSize } from '../shared/protocol';
+import * as push from './push';
 import { Session } from './session';
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -84,9 +86,24 @@ const send = (ws: WebSocket, msg: ServerMessage) => {
 const broadcast = (msg: ServerMessage) => wss.clients.forEach((ws) => send(ws, msg));
 
 session.on('output', (data) => broadcast({ type: 'output', data }));
-session.on('state', (state) => broadcast({ type: 'state', state }));
 
-function handle(msg: ClientMessage) {
+// Pages someone is looking at. While there is one, Claude blocking needs no push notification.
+const focused = new Set<WebSocket>();
+const alive = new WeakSet<WebSocket>(); // answered the last ping
+let lastStatus = session.state.status;
+// One push per wait: after a push, none until the user answers, however often the status flips meanwhile.
+let pushedAt = -1;
+session.on('state', (state) => {
+  broadcast({ type: 'state', state });
+  if (state.status === 'waiting' && lastStatus !== 'waiting' && focused.size === 0 && session.lastInputAt > pushedAt) {
+    push.notify({ title: 'Claude needs your input', body: basename(CWD) });
+    pushedAt = Date.now();
+  }
+
+  lastStatus = state.status;
+});
+
+function handle(ws: WebSocket, msg: ClientMessage) {
   switch (msg.type) {
     case 'start':
       // Every page asks on load, so only the first one after the server starts gets claude running.
@@ -109,6 +126,17 @@ function handle(msg: ClientMessage) {
     case 'resize':
       session.resize(msg);
       break;
+    case 'subscribe':
+      push.subscribe(msg.subscription);
+      break;
+    case 'focus':
+      if (msg.focused) {
+        focused.add(ws);
+      } else {
+        focused.delete(ws);
+      }
+
+      break;
   }
 }
 
@@ -116,17 +144,34 @@ wss.on('connection', (ws) => {
   send(ws, { type: 'reset' });
   send(ws, { type: 'state', state: session.state });
   send(ws, settingsMessage());
+  send(ws, { type: 'pushKey', key: push.publicKey });
   if (session.history) {
     send(ws, { type: 'output', data: session.history });
   }
 
   ws.on('message', (raw) => {
     try {
-      handle(JSON.parse(raw.toString()) as ClientMessage);
+      handle(ws, JSON.parse(raw.toString()) as ClientMessage);
     } catch (err) {
       send(ws, { type: 'error', message: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  alive.add(ws);
+  ws.on('pong', () => alive.add(ws));
+  ws.on('close', () => focused.delete(ws));
 });
+
+// Drop connections that stopped answering pings (a laptop gone to sleep, a dead port-forward), so a
+// page nobody can see doesn't hold back push notifications. Browsers answer pings on their own.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (!alive.delete(ws)) {
+      ws.terminate();
+    } else {
+      ws.ping();
+    }
+  });
+}, 30_000);
 
 server.listen(PORT, HOST, () => console.log(`session server on http://${HOST}:${PORT}`));

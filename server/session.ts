@@ -9,6 +9,13 @@ const ECHO_MS = 250; // output this soon after a keystroke is the echo, not the 
 // Prompts that block on the user while the TUI keeps animating (so silence never comes).
 // ponytail: plain string match on what claude and the destruction-blocker mod print today; add new prompts here
 const BLOCKED_MARKERS = ['Claude is waiting on your answer', 'Do you want to proceed?'];
+// Escape sequences and control characters: output made only of these draws nothing. Idle claude asks the
+// terminal for the cursor position (ESC[?6n) several times a second, which must not read as working.
+const CONTROL = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x1f\x7f]/g;
+// What the terminal sends back on its own: cursor position, device status and attributes, focus in/out,
+// OSC answers. Arrow keys and Esc don't match, so the user's own keys still count as answering.
+// ponytail: Shift-F3 (ESC[1;2R) looks like a cursor position answer; nothing in claude uses it
+const TERMINAL_REPORT = /^(?:\x1b\[[?>]?[\d;]*[RcnIO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))+$/;
 
 /**
  * One interactive process in a pseudo-terminal (TUIs like `claude` need a real TTY).
@@ -19,7 +26,7 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
   history = '';
   private proc?: IPty;
   private idleTimer?: NodeJS.Timeout;
-  private lastInputAt = 0;
+  lastInputAt = 0; // when the user last typed; the terminal's own answers don't count
   private blocked = false; // a blocking prompt is on screen; cleared when the user answers
 
   // ponytail: "quiet for idleMs = blocked on the user" heuristic; switch to Claude's Notification hook if it misfires
@@ -59,7 +66,7 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
     this.proc = proc;
     this.history = '';
     this.blocked = false;
-    this.setState({ status: 'running', command: label, cwd });
+    this.setState({ status: 'starting', command: label, cwd });
     this.armIdleTimer();
 
     // Guards ignore late events from a process that a restart already replaced.
@@ -70,6 +77,10 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
 
       this.history = (this.history + data).slice(-HISTORY_CHARS);
       this.emit('output', data);
+      if (!data.replace(CONTROL, '').trim()) {
+        return; // nothing visible: not the process working
+      }
+
       // Only count markers that end in this chunk (they may start in the previous one).
       if (BLOCKED_MARKERS.some((m) => this.history.slice(-(data.length + m.length - 1)).includes(m))) {
         this.blocked = true;
@@ -77,7 +88,7 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
 
       if (this.blocked) {
         this.setStatus('waiting');
-      } else if (Date.now() - this.lastInputAt > ECHO_MS) {
+      } else if (this.state.status !== 'starting' && Date.now() - this.lastInputAt > ECHO_MS) {
         this.setStatus('running');
       }
 
@@ -95,8 +106,11 @@ export class Session extends EventEmitter<{ output: [data: string]; state: [stat
   }
 
   write(data: string) {
-    this.lastInputAt = Date.now();
-    this.blocked = false;
+    if (!TERMINAL_REPORT.test(data)) {
+      this.lastInputAt = Date.now();
+      this.blocked = false;
+    }
+
     this.proc?.write(data);
   }
 

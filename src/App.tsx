@@ -3,16 +3,20 @@ import type { SessionStatus } from '../shared/protocol';
 import { SettingsDialog } from './SettingsDialog';
 import { Terminal, type TerminalHandle } from './Terminal';
 import { button, field, fieldInput } from './ui';
+import { usePush, type PushStatus } from './usePush';
 import { useSession } from './useSession';
 
+const STARTING = {
+  label: 'Starting',
+  hint: 'Starting Claude…',
+  dot: 'bg-zinc-400',
+  accent: 'border-zinc-200 text-zinc-500',
+  bar: 'bg-zinc-50',
+};
+
 const STATUS: Record<SessionStatus, { label: string; hint: string; dot: string; accent: string; bar: string }> = {
-  idle: {
-    label: 'Starting',
-    hint: 'Starting Claude…',
-    dot: 'bg-zinc-400',
-    accent: 'border-zinc-200 text-zinc-500',
-    bar: 'bg-zinc-50',
-  },
+  idle: STARTING,
+  starting: STARTING,
   running: {
     label: 'Working',
     hint: 'Process is producing output…',
@@ -36,6 +40,13 @@ const STATUS: Record<SessionStatus, { label: string; hint: string; dot: string; 
   },
 };
 
+const NOTIFY_TITLE: Record<PushStatus, string> = {
+  unsupported: 'Notifications need HTTPS or localhost. On iPhone and iPad, add this page to the Home Screen first',
+  denied: 'Notifications are blocked. Allow them for this site in your browser settings',
+  off: 'Notify me when Claude needs input',
+  on: 'Notifications are on',
+};
+
 // Keys TUIs like claude use to navigate menus and answer prompts.
 const KEYS = [
   { label: '↑', data: '\x1b[A' },
@@ -52,32 +63,18 @@ const KEYS = [
 
 export default function App() {
   const terminal = useRef<TerminalHandle>(null);
-  const { connected, state, settings, error, restart, input, resize, setOAuthToken } = useSession(terminal);
+  const { connected, state, settings, error, pushKey, restart, input, resize, setOAuthToken, subscribePush } =
+    useSession(terminal);
+  const push = usePush(pushKey, subscribePush);
   const [reply, setReply] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const live = state.status === 'running' || state.status === 'waiting';
+  const live = state.status === 'starting' || state.status === 'running' || state.status === 'waiting';
   const meta = STATUS[state.status];
 
-  // Pull the user back when the session blocks.
+  // Flag the tab when the session blocks. The server sends the push notification.
   useEffect(() => {
-    const waiting = state.status === 'waiting';
-    document.title = waiting ? '● Needs input · Session Runner' : 'Session Runner';
-    if (waiting && document.hidden && Notification.permission === 'granted') {
-      new Notification('Session needs your input', { body: state.command });
-    }
-  }, [state.status, state.command]);
-
-  // Browsers only allow the notification prompt from a user gesture, so ask on the first click.
-  useEffect(() => {
-    const ask = () => {
-      if (Notification.permission === 'default') {
-        void Notification.requestPermission();
-      }
-    };
-
-    window.addEventListener('pointerdown', ask, { once: true });
-    return () => window.removeEventListener('pointerdown', ask);
-  }, []);
+    document.title = state.status === 'waiting' ? '● Needs input · Session Runner' : 'Session Runner';
+  }, [state.status]);
 
   const onRestart = () => {
     restart();
@@ -125,6 +122,24 @@ export default function App() {
             </span>
             {meta.label}
           </span>
+          <button
+            type="button"
+            onClick={() => void push.enable()}
+            disabled={push.status !== 'off'}
+            aria-label={NOTIFY_TITLE[push.status]}
+            title={NOTIFY_TITLE[push.status]}
+            className={`grid size-8 place-items-center rounded-lg transition enabled:hover:bg-zinc-100 enabled:hover:text-zinc-900 disabled:cursor-default ${
+              push.status === 'on' ? 'text-emerald-600' : 'text-zinc-500'
+            } ${push.status === 'unsupported' || push.status === 'denied' ? 'opacity-40' : ''}`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="size-5" aria-hidden>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -178,9 +193,9 @@ export default function App() {
           </button>
         </div>
 
-        {error && (
+        {(error ?? push.error) && (
           <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            {error}
+            {error ?? push.error}
           </p>
         )}
 

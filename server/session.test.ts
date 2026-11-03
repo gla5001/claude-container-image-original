@@ -10,12 +10,15 @@ async function waitFor(session: Session, status: SessionStatus) {
   }
 }
 
-test('goes running → waiting on silence → exited, relaying input', async () => {
+test('goes starting → waiting on silence → exited, relaying input', async () => {
   const session = new Session(200);
+  const seen: SessionStatus[] = [];
+  session.on('state', (state) => seen.push(state.status));
   session.start({ command: 'echo ready; read x; echo "got $x"', cwd: '.', cols: 80, rows: 24 });
-  assert.equal(session.state.status, 'running');
+  assert.equal(session.state.status, 'starting');
 
   await waitFor(session, 'waiting');
+  assert.deepEqual(seen, ['starting', 'waiting']); // the startup output didn't read as working
   session.write('hi\r');
   await waitFor(session, 'exited');
 
@@ -39,6 +42,24 @@ test('a blocking prompt reads as waiting even while output keeps animating', asy
 
   session.write('2');
   await waitFor(session, 'running');
+  session.stop();
+  await waitFor(session, 'exited');
+});
+
+test('terminal queries and their answers are neither work nor the user answering', async () => {
+  const session = new Session(200);
+  // Like idle claude: prompt drawn, then it keeps asking the terminal for the cursor position.
+  session.start({
+    command: `printf "Claude is waiting on your answer\\n"; while true; do printf '\\033[?6n'; sleep 0.05; done`,
+    cwd: '.',
+    cols: 80,
+    rows: 24,
+  });
+  await waitFor(session, 'waiting');
+  session.write('\x1b[?5;1R'); // the browser terminal's automatic answer
+  await new Promise((resolve) => setTimeout(resolve, 500)); // well past idleMs, queries still going
+  assert.equal(session.state.status, 'waiting');
+
   session.stop();
   await waitFor(session, 'exited');
 });

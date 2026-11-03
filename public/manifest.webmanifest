@@ -1,0 +1,7 @@
+{
+  "name": "Session Runner",
+  "short_name": "Session Runner",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fafafa"
+}

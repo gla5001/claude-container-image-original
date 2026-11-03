@@ -4,7 +4,8 @@
 #
 # Build stage (full node image, ~1.8 GB): compiles node-pty from C++ (it ships no Linux prebuilds, so it
 # needs python/make/g++), installs the dev dependencies (Vite, Tailwind, TypeScript) to build dist/, then
-# prunes node_modules down to the runtime dependencies (express, ws and the compiled node-pty).
+# prunes node_modules down to the runtime dependencies (express, ws, web-push and the compiled node-pty).
+# The build also copies public/ (the push notification service worker and the web app manifest) into dist/public.
 #
 # Runtime stage (slim node image, ~380 MB): copies in only that output and adds the claude CLI and the
 # tools the coding-agents need. No compilers (unless EXTRA_APT_PACKAGES adds them), dev dependencies or
@@ -105,6 +106,8 @@ COPY --from=build /app/dist ./dist
 # The server listens on the container's loopback only (HOST defaults to 127.0.0.1): nothing on the
 # container or pod network can reach it. Kubernetes reaches it through `kubectl port-forward`. Local
 # Docker opts in with `-e HOST=0.0.0.0 -p 127.0.0.1:3001:3001` (see README).
+# Push notifications open no port: the server makes outbound HTTPS calls to the browsers' push services,
+# like its calls to GitHub and Anthropic. Their VAPID contact is GIT_AUTHOR_EMAIL, set at runtime.
 ENV NODE_ENV=production PORT=3001
 EXPOSE 3001
 CMD ["node", "dist/index.js"]
