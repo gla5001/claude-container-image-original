@@ -43,8 +43,8 @@ const STATUS: Record<SessionStatus, { label: string; hint: string; dot: string; 
 const NOTIFY_TITLE: Record<PushStatus, string> = {
   unsupported: 'Notifications need HTTPS or localhost. On iPhone and iPad, add this page to the Home Screen first',
   denied: 'Notifications are blocked. Allow them for this site in your browser settings',
-  off: 'Notify me when Claude needs input',
-  on: 'Notifications are on',
+  off: 'Turn on notifications for when Claude needs input',
+  on: 'Notifications are on. Click to turn them off',
 };
 
 // Keys TUIs like claude use to navigate menus and answer prompts.
@@ -124,15 +124,25 @@ export default function App() {
           </span>
           <button
             type="button"
-            onClick={() => void push.enable()}
-            disabled={push.status !== 'off'}
-            aria-label={NOTIFY_TITLE[push.status]}
+            onClick={() => void push.toggle()}
+            disabled={push.status === 'unsupported' || push.status === 'denied'}
+            aria-pressed={push.status === 'on'}
+            // An on/off toggle keeps one name; when it can't be used, the name says why.
+            aria-label={push.status === 'on' || push.status === 'off' ? 'Notifications' : NOTIFY_TITLE[push.status]}
             title={NOTIFY_TITLE[push.status]}
-            className={`grid size-8 place-items-center rounded-lg transition enabled:hover:bg-zinc-100 enabled:hover:text-zinc-900 disabled:cursor-default ${
-              push.status === 'on' ? 'text-emerald-600' : 'text-zinc-500'
-            } ${push.status === 'unsupported' || push.status === 'denied' ? 'opacity-40' : ''}`}
+            className={`grid size-8 place-items-center rounded-lg transition enabled:hover:bg-zinc-100 disabled:cursor-default disabled:opacity-40 ${
+              push.status === 'on' ? 'text-emerald-600' : 'text-zinc-500 enabled:hover:text-zinc-900'
+            }`}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="size-5" aria-hidden>
+            {/* Filled when on, outline when off. */}
+            <svg
+              viewBox="0 0 24 24"
+              fill={push.status === 'on' ? 'currentColor' : 'none'}
+              stroke="currentColor"
+              strokeWidth={1.5}
+              className="size-5"
+              aria-hidden
+            >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"

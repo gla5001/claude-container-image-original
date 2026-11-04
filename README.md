@@ -178,7 +178,7 @@ Both clones are cached like any other build step, so a rebuild won't pick up new
 
 ## Notifications
 
-Press the bell in the header and allow notifications. From then on, each time Claude stops and waits for you (it finished a turn, asks a question, or a permission or destruction-blocker prompt appears), that browser gets a notification, even with the tab closed or the phone locked. Click it to return to the session. No notification is sent while you have a Session Runner tab focused on any device, since you're already looking.
+Notifications are on in any browser that already allows them for the site. Anywhere else, press the bell in the header and allow notifications. The bell fills in green when they're on. Press it again to turn them off in that browser, and they stay off until you press it again. From then on, each time Claude stops and waits for you (it finished a turn, asks a question, or a permission or destruction-blocker prompt appears), that browser gets one notification, even with the tab closed or the phone locked. You get no more until you answer Claude. Click the notification to return to the session. No notification is sent while you have a Session Runner tab focused on any device, since you're already looking.
 
 It's standard [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API), with no account or third-party SDK. A service worker (`public/sw.js`) shows the notifications, and the server sends them itself with keys it generates when it starts. Delivery goes through the push service built into each browser (Google's for Chrome, Mozilla's for Firefox, Apple's for Safari), so the container needs outbound HTTPS to those services, like it already needs for GitHub and Anthropic. Messages are encrypted end to end. The push service sees only the delivery address, and the message holds only the repo folder's name.
 
@@ -191,7 +191,7 @@ What each device needs:
 Good to know:
 
 - The bell is dimmed when notifications aren't possible (plain `http` off `localhost`, or iOS outside a Home Screen app) or are blocked in browser settings. Hover over it to see which.
-- The server keeps subscriptions in memory. After the container or pod restarts, open the app once on each device and it subscribes again without asking.
+- The server keeps subscriptions in memory. After the container or pod restarts, open the app once on each device and it subscribes again without asking, unless you turned notifications off there.
 - A browser holds one push subscription per address. To get notifications from several pods on one machine, forward each pod to its own local port (`3001:3001`, `3002:3001`, …).
 
 ## Switching Claude accounts
